@@ -3,6 +3,7 @@ import WebSocket from 'ws';
 import dotenv from 'dotenv';
 import fastifyFormBody from '@fastify/formbody';
 import fastifyWs from '@fastify/websocket';
+import { createClient } from 'redis';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -14,6 +15,18 @@ if (!OPENAI_API_KEY) {
     console.error('Missing OpenAI API key. Please set it in the .env file.');
     process.exit(1);
 }
+
+
+// Initialize Redis client
+const redisClient = createClient(   {
+    password: 'Np70Y2NhQKL6VUoCl1CoWYYnf3dyn7To',
+    socket: {
+        host: 'redis-14552.c280.us-central1-2.gce.redns.redis-cloud.com',
+        port: 14552
+    }
+});
+redisClient.on('error', (err) => console.error('Redis Client Error', err));
+await redisClient.connect();
 
 // Initialize Fastify
 const fastify = Fastify();
@@ -71,6 +84,8 @@ fastify.register(async (fastify) => {
 
         // Connection-specific state
         let streamSid = null;
+        let accountnumber = null;
+
         let latestMediaTimestamp = 0;
         let lastAssistantItem = null;
         let markQueue = [];
@@ -84,22 +99,55 @@ fastify.register(async (fastify) => {
         });
 
         // Control initial session with OpenAI
-        const initializeSession = () => {
-            const sessionUpdate = {
-                type: 'session.update',
-                session: {
-                    turn_detection: { type: 'server_vad' },
-                    input_audio_format: 'g711_ulaw',
-                    output_audio_format: 'g711_ulaw',
-                    voice: VOICE,
-                    instructions: SYSTEM_MESSAGE,
-                    modalities: ["text", "audio"],
-                    temperature: 0.8,
-                }
-            };
+        const initializeSession = async () => {
+           // Replace with actual phone number if dynamic, for example, by using req or context data
+           const phoneNumber = '2011112222'; 
+           const redisData = await redisClient.get(accountnumber);
+           console.log( "key", accountnumber);
 
-            console.log('Sending session update:', JSON.stringify(sessionUpdate));
-            openAiWs.send(JSON.stringify(sessionUpdate));
+           if (redisData) {
+               const { instructions } = JSON.parse(redisData);
+               console.log('Retrieved instructions from Redis:', instructions  , "key", accountnumber);
+
+               const sessionUpdate = {
+                   type: 'session.update',
+                   session: {
+                       turn_detection: { type: 'server_vad' },
+                       input_audio_format: 'g711_ulaw',
+                       output_audio_format: 'g711_ulaw',
+                       voice: VOICE,
+                       instructions,  // Use instructions from Redis data
+                       modalities: ["text", "audio"],
+                       temperature: 0.8,
+                   }
+               };
+
+               openAiWs.send(JSON.stringify(sessionUpdate));
+           } else {
+               console.log('No data found in Redis for this phone number.');
+           }
+            // const sessionKey = await redisClient.get('2011112222');
+            // if (sessionKey) {
+            //     console.log('Retrieved session key from Redis:', sessionKey);
+            // } else {
+            //     console.log('Session key not found in Redis.');
+            // }
+
+            // const sessionUpdate = {
+            //     type: 'session.update',
+            //     session: {
+            //         turn_detection: { type: 'server_vad' },
+            //         input_audio_format: 'g711_ulaw',
+            //         output_audio_format: 'g711_ulaw',
+            //         voice: VOICE,
+            //         instructions: SYSTEM_MESSAGE,
+            //         modalities: ["text", "audio"],
+            //         temperature: 0.8,
+            //     }
+            // };
+
+           // console.log('Sending session update:', JSON.stringify(sessionUpdate));
+           // openAiWs.send(JSON.stringify(sessionUpdate));
 
             // Uncomment the following line to have AI speak first:
             // sendInitialConversationItem();
@@ -231,8 +279,9 @@ fastify.register(async (fastify) => {
                         break;
                     case 'start':
                         streamSid = data.start.streamSid;
-                        console.log('Incoming stream has started', streamSid);
-
+                        accountnumber = data.start.accountSid;
+                        console.log('Incoming stream has started', streamSid  ,  "accountsid", accountnumber);
+                        
                         // Reset start and media timestamp on a new stream
                         responseStartTimestampTwilio = null; 
                         latestMediaTimestamp = 0;
